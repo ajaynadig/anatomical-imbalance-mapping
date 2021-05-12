@@ -8,6 +8,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Anatomical Imbalance Mapping
+ajay nadig and armin raznahan, 2021
 
 AIM is a method developed by Nadig et al to quantify individual deviations from population structural covariance norms. More details can be found in this citation: 
 
