@@ -1,0 +1,138 @@
+---
+title: "AIM walthrough"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Anatomical Imbalance Mapping
+
+AIM is a method developed by Nadig et al to quantify individual deviations from population structural covariance norms. More details can be found in this citation: 
+
+Nadig, A., Seidlitz, J., McDermott, C.L., Liu, S., Bethlehem, R., Moore, T.M., Mallard, T.T., Clasen, L.S., Blumenthal, J.D., Lalonde, F.M., Gur, R.C., Gur, R.E., Bullmore, E.T., Satterthwaite, T.D., Raznahan, A. (2021). Morphological Integration of the Human Brain Across Adolescence and Adulthood. Proceedings of the National Academy of Sciences.
+
+This file contains the core function that computes aim ("dnu.compute.residuals"), and uses that script to reproduce a panel from Figure 2A of the above citation.
+
+```{r}
+#load in dependencies
+library(pracma)
+library(ggplot2)
+library(RCurl)
+```
+
+## AIM function
+
+This is the core function used to compute AIM.
+
+```{r}
+#define the AIM function
+dnu.compute.residuals <- function(braindata, residualtype) {
+ #braindata should have rows correspond to regions/vertices, and columns correspond to individuals  
+#residualtype is a string with two possible values: "abs" and "dir", corresponding to the calculation of absolute value and signed distances from population covariance norms. If the goal is to follow Nadig et al PNAS 2021, "abs" should be used. "Dir" may be appropriate in region-of-interest analyses. 
+
+
+  #variables: numregions is number of brain regions.
+  numregions = nrow(braindata)
+  numobs = ncol(braindata)
+  
+  #output data structure: residualarray is a numregions x numregions x numobsstructure that will hold residuals 
+  residualarray = array(0, c(numregions, numregions, numobs))
+  
+  #4. Define function to be applied to pairs of regions
+  resfunc <- function(i,j) {
+    #perform orthogonal regression (depends on packagr pracma)
+    demingmodel <- odregress(as.numeric(braindata[i,]), as.numeric(braindata[j,]))
+    #extract orthogonal regression residuals, put into output structure. at this point, we are extracting signed residuals.
+    return(residuals = demingmodel$err*sign(demingmodel$resid))
+  }
+  
+  #5. Compute pairwise residuals
+  #use "combn" to create table of all unique pairs of edges
+  unique_edges <- combn(numregions,2)
+  
+  #run resfunc over all unique pairs of regions
+  output_lower <- mapply(resfunc, unique_edges[1,],unique_edges[2,])
+  output_upper <- mapply(resfunc, unique_edges[2,],unique_edges[1,])
+  
+  #6. Fill in output data structure
+  
+
+  for (pair in 1:ncol(unique_edges)) {
+    
+    #lower triangle of residualarray
+    i = unique_edges[2,pair]
+    j = unique_edges[1,pair]
+    
+    if (residualtype == "dir") {
+      residualarray[i,j,] <- output_lower[,pair]
+    } else if (residualtype == "abs") {
+      residualarray[i,j,] <- abs(output_lower[,pair])
+    } else {
+      stop("unknown residual type")
+    }
+  #upper triangle of residualarray
+    i = unique_edges[1,pair]
+    j = unique_edges[2,pair]
+    
+    if (residualtype == "dir") {
+      residualarray[i,j,] <- output_upper[,pair]
+    } else if (residualtype == "abs") {
+      residualarray[i,j,] <- abs(output_upper[,pair])
+    } else {
+      stop("unknown residual type")
+    }
+  }
+  return(residualarray)
+}
+```
+
+## AIM function
+
+Let's give it a try on the NSPN dataset, downloaded from Kirstie Whitaker's github. This reproduces the bottom left panel of Figure 2A from the AIM publication. Euler numbers are available in the same github repo as this RMarkdown file.
+```{r}
+url <- getURL("https://raw.githubusercontent.com/KirstieJane/NSPN_WhitakerVertes_PNAS2016/master/DATA/COMPLETE/PARC_500aparc_thickness_behavmerge.csv")
+nspndata <- read.csv(text = url)
+
+#read in euler numbers. can be computed using freesurfer.
+#see https://surfer.nmr.mgh.harvard.edu/fswiki/mris_euler_number
+url2 <- getURL("https://raw.githubusercontent.com/ajaynadig/anatomical-imbalance-mapping/main/NSPN_Euler.csv")
+NSPN_eulers<- read.csv(text = url2, header = FALSE)
+#calculate average of two hemisphere euler numbers
+NSPN_eulers_avg <- (NSPN_eulers[,1]+NSPN_eulers[,2])/2
+
+#clean brain data: remove bad subj, demographic data columns, and "unknown" freesurfer regions. Also, following Rosen et al Neuroimage 2018, remove scans with average euler number of 217 or greater.
+nspn_braindata <- t(nspndata[-which(nspndata$nspn_id == 16907),-c(1:15,168)])[,NSPN_eulers_avg < 217]
+
+#similarly clean demographic data
+nspn_demo <- nspndata[-which(nspndata$nspn_id == 16907),1:14][NSPN_eulers_avg < 217,]
+nspn_eulers_sample <- NSPN_eulers_avg[NSPN_eulers_avg < 217]
+
+#control CT estimates for age and sex and euler
+input_data_raw_nspn<- nspn_braindata
+input_data_nspn <- t(sapply(1:nrow(input_data_raw_nspn), function(x) resid(lm(as.numeric(input_data_raw_nspn[x,])~nspn_demo$age_scan*nspn_demo$sex*nspn_eulers_sample))))
+
+
+#Compute residuals
+residualarray_abs_nspn <- dnu.compute.residuals(input_data_nspn, "abs")
+
+#"unspool" three dimensional output brick into a two dimensional table where columns are edges and rows are individuals.
+unique_edges <- combn(nrow(input_data_nspn),2)
+residuals_nspn <- sapply(1:ncol(unique_edges), function(x) residualarray_abs_nspn[unique_edges[2,x],unique_edges[1,x],])
+
+#visualize decline in AIM with age, removing individuals whose average AIM estimate is more than 4 sds away from the mean.
+nspn_ageplot <- ggplot(mapping = aes(x = nspn_demo$age_scan[abs(scale(rowMeans(residuals_nspn))) < 4], y = rowMeans(residuals_nspn)[abs(scale(rowMeans(residuals_nspn))) < 4]))+geom_point(shape = 21, color = "#FF6A21", size = 3)+theme_classic()+
+  labs(x = "age", y = "average imbalance")+
+  geom_smooth(method = "lm", color = "black", se = FALSE, size = 2)+
+  ggtitle("NSPN (n = 291)")+
+  scale_x_continuous("age", breaks = seq(14,25,2),limits = c(14,26,5))+
+  theme(plot.title= element_text(color = "#FF6A21", size = 25, face = "bold"),axis.text = element_text(size = 20), axis.title=element_text(size = 20, color = "black"))+ylim(c(0.09,0.255))
+  
+nspn_ageplot
+
+#statistics of AIM/age relationship
+nspn_aim <- rowMeans(residuals_nspn)[abs(scale(rowMeans(residuals_nspn))) < 4]
+nspn_age <- nspn_demo$age_scan[abs(scale(rowMeans(residuals_nspn))) < 4]
+summary(lm(nspn_aim~nspn_age))
+```
