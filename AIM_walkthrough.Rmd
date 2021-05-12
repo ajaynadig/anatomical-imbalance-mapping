@@ -88,7 +88,7 @@ dnu.compute.residuals <- function(braindata, residualtype) {
 }
 ```
 
-## AIM function
+## Example
 
 Let's give it a try on the NSPN dataset, downloaded from Kirstie Whitaker's github. This reproduces the bottom left panel of Figure 2A from the AIM publication. Euler numbers are available in the same github repo as this RMarkdown file.
 ```{r}
